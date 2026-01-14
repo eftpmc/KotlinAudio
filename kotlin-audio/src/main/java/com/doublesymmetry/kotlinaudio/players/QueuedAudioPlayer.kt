@@ -27,7 +27,7 @@ class QueuedAudioPlayer(
 ) : BaseAudioPlayer(context, playerConfig, bufferConfig, cacheConfig) {
     private val queue = LinkedList<MediaSource>()
     override val playerOptions = DefaultQueuedPlayerOptions(
-        crossfadeDurationMs = 0L
+        crossfadeDurationMs = 3000L
     )
 
     private val scope = MainScope()
@@ -151,6 +151,8 @@ class QueuedAudioPlayer(
 
             replacePlayer(incoming)
 
+            exoPlayer.pauseAtEndOfMediaItems = false
+
             try {
                 outgoing.clearMediaItems()
                 outgoing.release()
@@ -202,6 +204,9 @@ class QueuedAudioPlayer(
 
         incoming.volume = 0f
         incoming.playWhenReady = true
+        exoPlayer.pauseAtEndOfMediaItems = true
+
+        swapToIncomingWhenReady(outgoing, incoming)
 
         val fadeMs = max(250L, playerOptions.crossfadeDurationMs)
         val steps = max(10, (fadeMs / 40L).toInt())
@@ -221,9 +226,6 @@ class QueuedAudioPlayer(
                 delay(stepDelay)
                 i++
             }
-
-            
-            swapToIncomingWhenReady(outgoing, incoming)
         }
     }
 
