@@ -18,6 +18,7 @@ import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 class QueuedAudioPlayer(
     context: Context,
@@ -146,11 +147,10 @@ class QueuedAudioPlayer(
 
     private fun swapToIncomingWhenReady(outgoing: ExoPlayer, incoming: ExoPlayer) {
         fun doSwap() {
-            incoming.volume = 1f
-            incoming.playWhenReady = true
+            replacePlayer(incoming, requestFocus = false, forcePlayWhenReady = false)
 
-            replacePlayer(incoming)
-
+            exoPlayer.volume = 1f
+            exoPlayer.playWhenReady = true
             exoPlayer.pauseAtEndOfMediaItems = false
 
             try {
@@ -204,9 +204,7 @@ class QueuedAudioPlayer(
 
         incoming.volume = 0f
         incoming.playWhenReady = true
-        exoPlayer.pauseAtEndOfMediaItems = true
-
-        swapToIncomingWhenReady(outgoing, incoming)
+        outgoing.pauseAtEndOfMediaItems = true
 
         val fadeMs = max(250L, playerOptions.crossfadeDurationMs)
         val steps = max(10, (fadeMs / 40L).toInt())
@@ -220,6 +218,13 @@ class QueuedAudioPlayer(
                 val t = (i.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
                 val (outVol, inVol) = equalPowerCrossfade(t)
 
+                        Timber.d(
+                        "CF t=%.2f out(play=%s pwr=%s state=%d vol=%.2f) in(play=%s pwr=%s state=%d vol=%.2f)",
+                        t,
+                        outgoing.isPlaying, outgoing.playWhenReady, outgoing.playbackState, outgoing.volume,
+                        incoming.isPlaying, incoming.playWhenReady, incoming.playbackState, incoming.volume
+                        )
+
                 outgoing.volume = startOutgoingVol * outVol
                 incoming.volume = inVol
 
@@ -227,6 +232,8 @@ class QueuedAudioPlayer(
                 i++
             }
         }
+
+        swapToIncomingWhenReady(outgoing, incoming)
     }
 
     private fun equalPowerCrossfade(t: Float): Pair<Float, Float> {

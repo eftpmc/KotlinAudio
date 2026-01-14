@@ -429,7 +429,11 @@ abstract class BaseAudioPlayer internal constructor(
     }
 
    @CallSuper
-    protected fun replacePlayer(newPlayer: ExoPlayer) {
+    protected fun replacePlayer(
+        newPlayer: ExoPlayer,
+        requestFocus: Boolean = true,
+        forcePlayWhenReady: Boolean = false
+    ) {
         exoPlayer.removeListener(playerListener)
 
         val playerToUse =
@@ -443,11 +447,15 @@ abstract class BaseAudioPlayer internal constructor(
 
         exoPlayer = newPlayer
 
-        exoPlayer.playWhenReady = true
+        if (forcePlayWhenReady) {
+            exoPlayer.playWhenReady = true
+        }
 
         exoPlayer.addListener(playerListener)
 
-        requestAudioFocus()
+        if (requestFocus) {
+            requestAudioFocus()
+        }
     }
 
     /**
