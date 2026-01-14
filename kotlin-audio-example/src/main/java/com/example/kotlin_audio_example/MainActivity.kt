@@ -35,7 +35,6 @@ import com.doublesymmetry.kotlinaudio.models.MediaSessionCallback
 import com.doublesymmetry.kotlinaudio.models.MediaType
 import com.doublesymmetry.kotlinaudio.models.NotificationButton
 import com.doublesymmetry.kotlinaudio.models.NotificationConfig
-import com.doublesymmetry.kotlinaudio.models.RepeatMode
 import com.doublesymmetry.kotlinaudio.models.PlayerConfig
 import com.doublesymmetry.kotlinaudio.players.QueuedAudioPlayer
 import com.example.kotlin_audio_example.ui.component.ActionBottomSheet
@@ -65,7 +64,6 @@ class MainActivity : ComponentActivity() {
             )
         )
         player.add(tracks)
-        player.playerOptions.repeatMode = RepeatMode.ALL
         player.play()
 
         setupNotification()
