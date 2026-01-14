@@ -198,9 +198,12 @@ class QueuedAudioPlayer(
         val outgoing = exoPlayer
         val startOutgoingVol = outgoing.volume.coerceIn(0f, 1f)
 
-        val nextSource = queue[nextIndex]
+        val nextItem = items[nextIndex]
+        val nextSource = getMediaSourceFromAudioItem(nextItem)
+
         incoming.setMediaSource(nextSource)
         incoming.prepare()
+
 
         incoming.volume = 0f
         incoming.playWhenReady = true
