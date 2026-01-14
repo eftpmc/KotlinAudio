@@ -4,16 +4,19 @@ import android.content.Context
 import com.doublesymmetry.kotlinaudio.models.*
 import com.doublesymmetry.kotlinaudio.players.components.getAudioItemHolder
 import com.google.android.exoplayer2.C
+import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.IllegalSeekPositionException
 import com.google.android.exoplayer2.source.MediaSource
 import java.util.*
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class QueuedAudioPlayer(
     context: Context,
@@ -22,12 +25,18 @@ class QueuedAudioPlayer(
     cacheConfig: CacheConfig? = null
 ) : BaseAudioPlayer(context, playerConfig, bufferConfig, cacheConfig) {
     private val queue = LinkedList<MediaSource>()
-    override val playerOptions = DefaultQueuedPlayerOptions()
+    override val playerOptions = DefaultQueuedPlayerOptions(
+        crossfadeDurationMs = 5_000L
+    )
 
     private val scope = MainScope()
 
     private var monitorJob: Job? = null
     private var crossfadeTriggeredForIndex: Int? = null
+    private var crossfadeJob: Job? = null
+
+    private var nextPlayer: ExoPlayer? = null
+    private var crossfadingToIndex: Int? = null
 
     val currentIndex
         get() = exoPlayer.currentMediaItemIndex
@@ -80,28 +89,117 @@ class QueuedAudioPlayer(
             while (isActive) {
                 delay(250)
 
-                val duration = exoPlayer.duration
-                if (duration <= 0) continue
+                if (!exoPlayer.playWhenReady) continue
+                if (exoPlayer.playbackState != ExoPlayer.STATE_READY) continue
+                if (exoPlayer.mediaItemCount <= 1) continue
 
-                val position = exoPlayer.currentPosition
-                val remaining = duration - position
-                val nextIndex = exoPlayer.nextMediaItemIndex
+                val duration = exoPlayer.duration
+                if (duration == C.TIME_UNSET || duration <= 0) continue
+
+                val remaining = duration - exoPlayer.currentPosition
+                val nextIdx = exoPlayer.nextMediaItemIndex
+                if (nextIdx == C.INDEX_UNSET) continue
+
+                val cfMs = playerOptions.crossfadeDurationMs
+                if (cfMs <= 0) continue
 
                 if (
-                    remaining <= playerOptions.crossfadeDurationMs &&
-                    nextIndex != C.INDEX_UNSET &&
-                    crossfadeTriggeredForIndex != nextIndex
+                    remaining <= cfMs &&
+                    crossfadeTriggeredForIndex != nextIdx &&
+                    crossfadingToIndex != nextIdx
                 ) {
-                    crossfadeTriggeredForIndex = nextIndex
-                    onCrossfadeWindowReached(nextIndex)
+                    crossfadeTriggeredForIndex = nextIdx
+                    onCrossfadeWindowReached(nextIdx)
                 }
             }
         }
     }
 
+    private fun buildNextPlayer(): ExoPlayer {
+        val p = ExoPlayer.Builder(context).build()
+
+        p.volume = 0f
+        p.playbackParameters = exoPlayer.playbackParameters
+        p.setAudioAttributes(exoPlayer.audioAttributes, false)
+
+        return p
+    }
+
+    private fun cancelCrossfade() {
+        crossfadeJob?.cancel()
+        crossfadeJob = null
+        crossfadingToIndex = null
+
+        nextPlayer?.run {
+            try {
+                playWhenReady = false
+                stop()
+                clearMediaItems()
+                release()
+            } catch (_: Throwable) {}
+        }
+        nextPlayer = null
+    }
+
     private fun onCrossfadeWindowReached(nextIndex: Int) {
-        // TEMP: just log / mark for now
-        // Next step: create second ExoPlayer here
+        if (playerOptions.crossfadeDurationMs <= 0) return
+        if (nextIndex < 0 || nextIndex >= queue.size) return
+        if (queue.size < 2) return
+
+        cancelCrossfade()
+
+        crossfadingToIndex = nextIndex
+        val incoming = buildNextPlayer()
+        nextPlayer = incoming
+
+        val nextSource = queue[nextIndex]
+        incoming.setMediaSource(nextSource)
+        incoming.prepare()
+        incoming.playWhenReady = true
+
+        val fadeMs = max(250L, playerOptions.crossfadeDurationMs)
+        val steps = max(10, (fadeMs / 40L).toInt())
+        val stepDelay = fadeMs / steps
+
+        val outgoing = exoPlayer
+        val startOutgoingVol = outgoing.volume.coerceIn(0f, 1f)
+
+        crossfadeJob = scope.launch {
+            var i = 0
+            while (isActive && i <= steps) {
+                val t = (i.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
+                val (outVol, inVol) = equalPowerCrossfade(t)
+
+                outgoing.volume = startOutgoingVol * outVol
+                incoming.volume = inVol
+
+                delay(stepDelay)
+                i++
+            }
+
+            try {
+                outgoing.playWhenReady = false
+                outgoing.stop()
+            } catch (_: Throwable) {}
+
+            replacePlayer(incoming)
+
+            try {
+                outgoing.clearMediaItems()
+                outgoing.release()
+            } catch (_: Throwable) {}
+
+            nextPlayer = null
+            crossfadingToIndex = null
+        }
+    }
+
+    private fun equalPowerCrossfade(t: Float): Pair<Float, Float> {
+        val tt = t.coerceIn(0f, 1f)
+        val angle = tt * (Math.PI / 2.0)
+        val out = cos(angle).toFloat()
+        val inn = sin(angle).toFloat()
+        return out to inn
     }
 
     override fun load(item: AudioItem, playWhenReady: Boolean) {
@@ -110,7 +208,9 @@ class QueuedAudioPlayer(
         if (playWhenReady) startCrossfadeMonitorIfNeeded()
     }
 
-    override fun load(item: AudioItem) {
+   override fun load(item: AudioItem) {
+        cancelCrossfade()
+
         if (queue.isEmpty()) {
             add(item)
         } else {
@@ -118,9 +218,11 @@ class QueuedAudioPlayer(
             queue[currentIndex] = mediaSource
             exoPlayer.addMediaSource(currentIndex + 1, mediaSource)
             exoPlayer.removeMediaItem(currentIndex)
-            exoPlayer.seekTo(currentIndex, C.TIME_UNSET);
+            exoPlayer.seekTo(currentIndex, C.TIME_UNSET)
             exoPlayer.prepare()
         }
+
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -130,6 +232,7 @@ class QueuedAudioPlayer(
     fun add(item: AudioItem, playWhenReady: Boolean) {
         exoPlayer.playWhenReady = playWhenReady
         add(item)
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -142,6 +245,7 @@ class QueuedAudioPlayer(
         queue.add(mediaSource)
         exoPlayer.addMediaSource(mediaSource)
         exoPlayer.prepare()
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -152,6 +256,7 @@ class QueuedAudioPlayer(
     fun add(items: List<AudioItem>, playWhenReady: Boolean) {
         exoPlayer.playWhenReady = playWhenReady
         add(items)
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -163,6 +268,7 @@ class QueuedAudioPlayer(
         queue.addAll(mediaSources)
         exoPlayer.addMediaSources(mediaSources)
         exoPlayer.prepare()
+        startCrossfadeMonitorIfNeeded()
     }
 
 
@@ -176,6 +282,7 @@ class QueuedAudioPlayer(
         queue.addAll(atIndex, mediaSources)
         exoPlayer.addMediaSources(atIndex, mediaSources)
         exoPlayer.prepare()
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -183,8 +290,10 @@ class QueuedAudioPlayer(
      * @param index The index of the item to remove.
      */
     fun remove(index: Int) {
+        cancelCrossfade()
         queue.removeAt(index)
         exoPlayer.removeMediaItem(index)
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -192,6 +301,7 @@ class QueuedAudioPlayer(
      * @param indexes The indexes of the items to remove.
      */
     fun remove(indexes: List<Int>) {
+        cancelCrossfade()
         val sorted = indexes.toMutableList()
         // Sort the indexes in descending order so we can safely remove them one by one
         // without having the next index possibly newly pointing to another item than intended:
@@ -199,6 +309,7 @@ class QueuedAudioPlayer(
         sorted.forEach {
             remove(it)
         }
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -206,8 +317,11 @@ class QueuedAudioPlayer(
      * Does nothing if there is no next item to skip to.
      */
     fun next() {
+        cancelCrossfade()
         exoPlayer.seekToNextMediaItem()
         exoPlayer.prepare()
+        crossfadeTriggeredForIndex = null
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -215,8 +329,11 @@ class QueuedAudioPlayer(
      * Does nothing if there is no previous item to skip to.
      */
     fun previous() {
+        cancelCrossfade()
         exoPlayer.seekToPreviousMediaItem()
         exoPlayer.prepare()
+        crossfadeTriggeredForIndex = null
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -225,10 +342,13 @@ class QueuedAudioPlayer(
      * @param toIndex The index to move the item to. If the index is larger than the size of the queue, the item is moved to the end of the queue instead.
      */
     fun move(fromIndex: Int, toIndex: Int) {
+        cancelCrossfade()
         exoPlayer.moveMediaItem(fromIndex, toIndex)
         val item = queue[fromIndex]
         queue.removeAt(fromIndex)
         queue.add(max(0, min(items.size, if (toIndex > fromIndex) toIndex else toIndex - 1)), item)
+        crossfadeTriggeredForIndex = null
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -239,6 +359,7 @@ class QueuedAudioPlayer(
     fun jumpToItem(index: Int, playWhenReady: Boolean) {
         exoPlayer.playWhenReady = playWhenReady
         jumpToItem(index)
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
@@ -246,9 +367,12 @@ class QueuedAudioPlayer(
      * @param index the index to jump to
      */
     fun jumpToItem(index: Int) {
+        cancelCrossfade()
         try {
             exoPlayer.seekTo(index, C.TIME_UNSET)
             exoPlayer.prepare()
+            crossfadeTriggeredForIndex = null
+            startCrossfadeMonitorIfNeeded()
         } catch (e: IllegalSeekPositionException) {
             throw Error("This item index $index does not exist. The size of the queue is ${queue.size} items.")
         }
@@ -259,34 +383,46 @@ class QueuedAudioPlayer(
      * If updating current index, we update the notification metadata if [automaticallyUpdateNotificationMetadata] is true.
      */
     fun replaceItem(index: Int, item: AudioItem) {
+        cancelCrossfade()
         val mediaSource = getMediaSourceFromAudioItem(item)
         queue[index] = mediaSource
         if (index == currentIndex) {
             updateNotificationIfNecessary(overrideAudioItem = item)
         }
+        crossfadeTriggeredForIndex = null
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
      * Removes all the upcoming items, if any (the ones returned by [next]).
      */
     fun removeUpcomingItems() {
+        cancelCrossfade()
+
         if (queue.lastIndex == -1 || currentIndex == -1) return
         val lastIndex = queue.lastIndex + 1
         val fromIndex = currentIndex + 1
 
         exoPlayer.removeMediaItems(fromIndex, lastIndex)
         queue.subList(fromIndex, lastIndex).clear()
+
+        crossfadeTriggeredForIndex = null
+        startCrossfadeMonitorIfNeeded()
     }
 
     /**
      * Removes all the previous items, if any (the ones returned by [previous]).
      */
     fun removePreviousItems() {
+        cancelCrossfade()
         exoPlayer.removeMediaItems(0, currentIndex)
         queue.subList(0, currentIndex).clear()
+        crossfadeTriggeredForIndex = null
+        startCrossfadeMonitorIfNeeded()
     }
 
     override fun destroy() {
+        cancelCrossfade()
         monitorJob?.cancel()
         monitorJob = null
         queue.clear()
@@ -294,6 +430,7 @@ class QueuedAudioPlayer(
     }
 
     override fun clear() {
+        cancelCrossfade()
         queue.clear()
         super.clear()
     }

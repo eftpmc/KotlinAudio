@@ -10,5 +10,5 @@ interface QueuedPlayerOptions : PlayerOptions {
 
 class DefaultQueuedPlayerOptions(
     override var alwaysPauseOnInterruption: Boolean = false,
-    override var crossfadeDurationMs: Long = 5_000L,
+    override var crossfadeDurationMs: Long = 0L,
 ) : QueuedPlayerOptions
