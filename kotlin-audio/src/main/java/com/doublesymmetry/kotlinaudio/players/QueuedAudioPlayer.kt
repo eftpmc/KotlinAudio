@@ -28,7 +28,7 @@ class QueuedAudioPlayer(
 ) : BaseAudioPlayer(context, playerConfig, bufferConfig, cacheConfig) {
     private val queue = LinkedList<MediaSource>()
     override val playerOptions = DefaultQueuedPlayerOptions(
-        crossfadeDurationMs = 3000L
+        crossfadeDurationMs = 10_000L
     )
 
     private val scope = MainScope()
