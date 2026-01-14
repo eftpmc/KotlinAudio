@@ -115,6 +115,9 @@ abstract class BaseAudioPlayer internal constructor(
             }
         }
 
+    val audioSessionId: Int
+    get() = exoPlayer.audioSessionId
+
     var playWhenReady: Boolean
         get() = exoPlayer.playWhenReady
         set(value) {
