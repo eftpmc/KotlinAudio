@@ -93,6 +93,8 @@ abstract class BaseAudioPlayer internal constructor(
 
     val notificationManager: NotificationManager
 
+    private val playerListener = PlayerListener()
+
     open val playerOptions: PlayerOptions = DefaultPlayerOptions()
 
     open val currentItem: AudioItem?
@@ -250,7 +252,7 @@ abstract class BaseAudioPlayer internal constructor(
             playerEventHolder
         )
 
-        exoPlayer.addListener(PlayerListener())
+        exoPlayer.addListener(playerListener)
 
         scope.launch {
             // Whether ExoPlayer should manage audio focus for us automatically
@@ -277,8 +279,8 @@ abstract class BaseAudioPlayer internal constructor(
         playerEventHolder.updateAudioPlayerState(AudioPlayerState.IDLE)
     }
 
-    private fun createForwardingPlayer(): ForwardingPlayer {
-        return object : ForwardingPlayer(exoPlayer) {
+    private fun createForwardingPlayer(player: ExoPlayer): ForwardingPlayer {
+        return object : ForwardingPlayer(player) {
             override fun play() {
                 playerEventHolder.updateOnPlayerActionTriggeredExternally(MediaSessionCallback.PLAY)
             }
@@ -424,6 +426,29 @@ abstract class BaseAudioPlayer internal constructor(
      */
     fun setPauseAtEndOfItem(pause: Boolean) {
         exoPlayer.pauseAtEndOfMediaItems = pause
+    }
+
+    @CallSuper
+    protected fun replacePlayer(newPlayer: ExoPlayer) {
+        // Detach listener from old player
+        exoPlayer.removeListener(playerListener)
+
+        // Decide which player MediaSession should see
+        val playerToUse =
+            if (playerConfig.interceptPlayerActionsTriggeredExternally)
+                createForwardingPlayer(exoPlayer)
+            else
+                newPlayer
+
+        // Rebind MediaSession + notifications
+        mediaSessionConnector.setPlayer(playerToUse)
+        notificationManager.setPlayer(playerToUse)
+
+        // Swap reference
+        exoPlayer = newPlayer
+
+        // Reattach listener
+        exoPlayer.addListener(playerListener)
     }
 
     /**

@@ -749,6 +749,11 @@ class NotificationManager internal constructor(
         invalidate()
     }
 
+    fun setPlayer(player: Player) {
+        internalNotificationManager?.setPlayer(player)
+        mediaSessionConnector.setPlayer(player)
+    }
+
     override fun onNotificationPosted(
         notificationId: Int,
         notification: Notification,
