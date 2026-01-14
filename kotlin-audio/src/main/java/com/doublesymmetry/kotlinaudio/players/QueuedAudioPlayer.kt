@@ -19,6 +19,11 @@ class QueuedAudioPlayer(
     private val queue = LinkedList<MediaSource>()
     override val playerOptions = DefaultQueuedPlayerOptions(exoPlayer)
 
+    private var crossfadeJob: Job? = null
+    private var crossfadeTriggeredForIndex: Int? = null
+
+    private val CROSSFADE_MS = 5_000L
+
     val currentIndex
         get() = exoPlayer.currentMediaItemIndex
 

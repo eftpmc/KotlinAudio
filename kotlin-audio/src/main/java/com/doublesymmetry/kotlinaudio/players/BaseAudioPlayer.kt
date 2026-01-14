@@ -85,7 +85,7 @@ abstract class BaseAudioPlayer internal constructor(
     private val bufferConfig: BufferConfig?,
     private val cacheConfig: CacheConfig?
 ) : AudioManager.OnAudioFocusChangeListener {
-    protected val exoPlayer: ExoPlayer
+    protected var exoPlayer: ExoPlayer
 
     private var cache: SimpleCache? = null
     private val scope = MainScope()
