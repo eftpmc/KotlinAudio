@@ -5,6 +5,7 @@ import com.doublesymmetry.kotlinaudio.models.*
 import com.doublesymmetry.kotlinaudio.players.components.getAudioItemHolder
 import com.google.android.exoplayer2.C
 import com.google.android.exoplayer2.ExoPlayer
+import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.IllegalSeekPositionException
 import com.google.android.exoplayer2.source.MediaSource
 import java.util.*
@@ -82,6 +83,7 @@ class QueuedAudioPlayer(
         get() = items.getOrNull(currentIndex - 1)
 
     private fun startCrossfadeMonitorIfNeeded() {
+        if (playerOptions.repeatMode == RepeatMode.ONE) return
         if (playerOptions.crossfadeDurationMs <= 0) return
         if (monitorJob != null) return
 
@@ -129,6 +131,7 @@ class QueuedAudioPlayer(
         crossfadeJob?.cancel()
         crossfadeJob = null
         crossfadingToIndex = null
+        crossfadeTriggeredForIndex = null
 
         nextPlayer?.run {
             try {
@@ -141,58 +144,78 @@ class QueuedAudioPlayer(
         nextPlayer = null
     }
 
-    private fun onCrossfadeWindowReached(nextIndex: Int) {
-        if (playerOptions.crossfadeDurationMs <= 0) return
-        if (nextIndex < 0 || nextIndex >= queue.size) return
-        if (queue.size < 2) return
+    private fun swapToIncomingWhenReady(outgoing: ExoPlayer, incoming: ExoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state != Player.STATE_READY) return
 
-        cancelCrossfade()
+                incoming.removeListener(this)
 
-        crossfadingToIndex = nextIndex
-        val incoming = buildNextPlayer()
-        nextPlayer = incoming
+                replacePlayer(incoming)
 
-        val nextSource = queue[nextIndex]
-        incoming.setMediaSource(nextSource)
-        incoming.prepare()
-        incoming.playWhenReady = true
+                try {
+                    outgoing.clearMediaItems()
+                    outgoing.release()
+                } catch (_: Throwable) {}
 
-        val fadeMs = max(250L, playerOptions.crossfadeDurationMs)
-        val steps = max(10, (fadeMs / 40L).toInt())
-        val stepDelay = fadeMs / steps
-
-        val outgoing = exoPlayer
-        val startOutgoingVol = outgoing.volume.coerceIn(0f, 1f)
-
-        crossfadeJob = scope.launch {
-            var i = 0
-            while (isActive && i <= steps) {
-                val t = (i.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
-                val (outVol, inVol) = equalPowerCrossfade(t)
-
-                outgoing.volume = startOutgoingVol * outVol
-                incoming.volume = inVol
-
-                delay(stepDelay)
-                i++
+                nextPlayer = null
+                crossfadingToIndex = null
             }
 
-            try {
-                outgoing.playWhenReady = false
-                outgoing.stop()
-            } catch (_: Throwable) {}
-
-            replacePlayer(incoming)
-
-            try {
-                outgoing.clearMediaItems()
-                outgoing.release()
-            } catch (_: Throwable) {}
-
-            nextPlayer = null
-            crossfadingToIndex = null
+            override fun onPlayerError(error: com.google.android.exoplayer2.PlaybackException) {
+                incoming.removeListener(this)
+                cancelCrossfade()
+            }
         }
+
+        incoming.addListener(listener)
     }
+
+    private fun onCrossfadeWindowReached(nextIndex: Int) {
+    if (playerOptions.crossfadeDurationMs <= 0) return
+    if (nextIndex < 0 || nextIndex >= queue.size) return
+    if (queue.size < 2) return
+
+    cancelCrossfade()
+
+    crossfadingToIndex = nextIndex
+    val incoming = buildNextPlayer()
+    nextPlayer = incoming
+
+    val outgoing = exoPlayer
+    val startOutgoingVol = outgoing.volume.coerceIn(0f, 1f)
+
+    val nextSource = queue[nextIndex]
+    incoming.setMediaSource(nextSource)
+    incoming.prepare()
+
+    incoming.volume = 0f
+    incoming.playWhenReady = true
+
+    val fadeMs = max(250L, playerOptions.crossfadeDurationMs)
+    val steps = max(10, (fadeMs / 40L).toInt())
+    val stepDelay = fadeMs / steps
+
+    crossfadeJob = scope.launch {
+        var i = 0
+        while (isActive && i <= steps) {
+            val t = (i.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
+            val (outVol, inVol) = equalPowerCrossfade(t)
+
+            outgoing.volume = startOutgoingVol * outVol
+            incoming.volume = inVol
+
+            delay(stepDelay)
+            i++
+        }
+
+        try {
+            outgoing.playWhenReady = false
+            outgoing.stop()
+        } catch (_: Throwable) {}
+        swapToIncomingWhenReady(outgoing, incoming)
+    }
+}
 
     private fun equalPowerCrossfade(t: Float): Pair<Float, Float> {
         val tt = t.coerceIn(0f, 1f)
