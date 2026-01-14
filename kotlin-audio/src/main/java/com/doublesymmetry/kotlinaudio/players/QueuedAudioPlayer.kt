@@ -10,6 +10,10 @@ import java.util.*
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 
 class QueuedAudioPlayer(
     context: Context,
@@ -18,12 +22,12 @@ class QueuedAudioPlayer(
     cacheConfig: CacheConfig? = null
 ) : BaseAudioPlayer(context, playerConfig, bufferConfig, cacheConfig) {
     private val queue = LinkedList<MediaSource>()
-    override val playerOptions = DefaultQueuedPlayerOptions(exoPlayer)
+    override val playerOptions = DefaultQueuedPlayerOptions()
 
-    private var crossfadeJob: Job? = null
+    private val scope = MainScope()
+
+    private var monitorJob: Job? = null
     private var crossfadeTriggeredForIndex: Int? = null
-
-    private val CROSSFADE_MS = 5_000L
 
     val currentIndex
         get() = exoPlayer.currentMediaItemIndex
@@ -68,9 +72,42 @@ class QueuedAudioPlayer(
     val previousItem: AudioItem?
         get() = items.getOrNull(currentIndex - 1)
 
+    private fun startCrossfadeMonitorIfNeeded() {
+        if (playerOptions.crossfadeDurationMs <= 0) return
+        if (monitorJob != null) return
+
+        monitorJob = scope.launch {
+            while (isActive) {
+                delay(250)
+
+                val duration = exoPlayer.duration
+                if (duration <= 0) continue
+
+                val position = exoPlayer.currentPosition
+                val remaining = duration - position
+                val nextIndex = exoPlayer.nextMediaItemIndex
+
+                if (
+                    remaining <= playerOptions.crossfadeDurationMs &&
+                    nextIndex != C.INDEX_UNSET &&
+                    crossfadeTriggeredForIndex != nextIndex
+                ) {
+                    crossfadeTriggeredForIndex = nextIndex
+                    onCrossfadeWindowReached(nextIndex)
+                }
+            }
+        }
+    }
+
+    private fun onCrossfadeWindowReached(nextIndex: Int) {
+        // TEMP: just log / mark for now
+        // Next step: create second ExoPlayer here
+    }
+
     override fun load(item: AudioItem, playWhenReady: Boolean) {
         load(item)
         exoPlayer.playWhenReady = playWhenReady
+        if (playWhenReady) startCrossfadeMonitorIfNeeded()
     }
 
     override fun load(item: AudioItem) {
@@ -250,6 +287,9 @@ class QueuedAudioPlayer(
     }
 
     override fun destroy() {
+        monitorJob?.cancel()
+        monitorJob = null
+        scope.cancel()
         queue.clear()
         super.destroy()
     }
