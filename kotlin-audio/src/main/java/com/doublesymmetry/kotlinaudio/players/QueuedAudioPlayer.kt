@@ -289,7 +289,6 @@ class QueuedAudioPlayer(
     override fun destroy() {
         monitorJob?.cancel()
         monitorJob = null
-        scope.cancel()
         queue.clear()
         super.destroy()
     }

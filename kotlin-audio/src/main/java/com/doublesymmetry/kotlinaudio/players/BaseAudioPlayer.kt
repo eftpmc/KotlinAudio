@@ -241,7 +241,7 @@ abstract class BaseAudioPlayer internal constructor(
         mediaSession.isActive = true
 
         val playerToUse =
-            if (playerConfig.interceptPlayerActionsTriggeredExternally) createForwardingPlayer() else exoPlayer
+            if (playerConfig.interceptPlayerActionsTriggeredExternally) createForwardingPlayer(exoPlayer) else exoPlayer
 
         notificationManager = NotificationManager(
             context,
@@ -436,7 +436,7 @@ abstract class BaseAudioPlayer internal constructor(
         // Decide which player MediaSession should see
         val playerToUse =
             if (playerConfig.interceptPlayerActionsTriggeredExternally)
-                createForwardingPlayer(exoPlayer)
+                createForwardingPlayer(newPlayer)
             else
                 newPlayer
 
