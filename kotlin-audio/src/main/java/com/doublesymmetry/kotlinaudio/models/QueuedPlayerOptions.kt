@@ -6,11 +6,17 @@ import com.google.android.exoplayer2.Player
 interface QueuedPlayerOptions : PlayerOptions {
     override var alwaysPauseOnInterruption: Boolean
     var repeatMode: RepeatMode
+        /**
+     * Crossfade duration in milliseconds.
+     * 0 = disabled
+     */
+    var crossfadeDurationMs: Long
 }
 
 class DefaultQueuedPlayerOptions(
     private val exoPlayer: ExoPlayer,
     override var alwaysPauseOnInterruption: Boolean = false,
+    override var crossfadeDurationMs: Long = 0L,
 ) : QueuedPlayerOptions {
     // Functions in data classes might or might not be a bit of a code smell.
     // I'm using the passed exoPlayer which breaks separation of concerns. But it's also useful.
