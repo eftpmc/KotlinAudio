@@ -27,7 +27,7 @@ class QueuedAudioPlayer(
 ) : BaseAudioPlayer(context, playerConfig, bufferConfig, cacheConfig) {
     private val queue = LinkedList<MediaSource>()
     override val playerOptions = DefaultQueuedPlayerOptions(
-        crossfadeDurationMs = 5_000L
+        crossfadeDurationMs = 10_000L
     )
 
     private val scope = MainScope()
@@ -145,21 +145,32 @@ class QueuedAudioPlayer(
     }
 
     private fun swapToIncomingWhenReady(outgoing: ExoPlayer, incoming: ExoPlayer) {
+        fun doSwap() {
+            incoming.volume = 1f
+            incoming.playWhenReady = true
+
+            replacePlayer(incoming)
+
+            try {
+                outgoing.clearMediaItems()
+                outgoing.release()
+            } catch (_: Throwable) {}
+
+            nextPlayer = null
+            crossfadingToIndex = null
+            crossfadeTriggeredForIndex = null
+        }
+
+        if (incoming.playbackState == Player.STATE_READY) {
+            doSwap()
+            return
+        }
+
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state != Player.STATE_READY) return
-
                 incoming.removeListener(this)
-
-                replacePlayer(incoming)
-
-                try {
-                    outgoing.clearMediaItems()
-                    outgoing.release()
-                } catch (_: Throwable) {}
-
-                nextPlayer = null
-                crossfadingToIndex = null
+                doSwap()
             }
 
             override fun onPlayerError(error: com.google.android.exoplayer2.PlaybackException) {
@@ -172,50 +183,49 @@ class QueuedAudioPlayer(
     }
 
     private fun onCrossfadeWindowReached(nextIndex: Int) {
-    if (playerOptions.crossfadeDurationMs <= 0) return
-    if (nextIndex < 0 || nextIndex >= queue.size) return
-    if (queue.size < 2) return
+        if (playerOptions.crossfadeDurationMs <= 0) return
+        if (nextIndex < 0 || nextIndex >= queue.size) return
+        if (queue.size < 2) return
 
-    cancelCrossfade()
+        cancelCrossfade()
 
-    crossfadingToIndex = nextIndex
-    val incoming = buildNextPlayer()
-    nextPlayer = incoming
+        crossfadingToIndex = nextIndex
+        val incoming = buildNextPlayer()
+        nextPlayer = incoming
 
-    val outgoing = exoPlayer
-    val startOutgoingVol = outgoing.volume.coerceIn(0f, 1f)
+        val outgoing = exoPlayer
+        val startOutgoingVol = outgoing.volume.coerceIn(0f, 1f)
 
-    val nextSource = queue[nextIndex]
-    incoming.setMediaSource(nextSource)
-    incoming.prepare()
+        val nextSource = queue[nextIndex]
+        incoming.setMediaSource(nextSource)
+        incoming.prepare()
 
-    incoming.volume = 0f
-    incoming.playWhenReady = true
+        incoming.volume = 0f
+        incoming.playWhenReady = true
 
-    val fadeMs = max(250L, playerOptions.crossfadeDurationMs)
-    val steps = max(10, (fadeMs / 40L).toInt())
-    val stepDelay = fadeMs / steps
+        val fadeMs = max(250L, playerOptions.crossfadeDurationMs)
+        val steps = max(10, (fadeMs / 40L).toInt())
+        val stepDelay = fadeMs / steps
 
-    crossfadeJob = scope.launch {
-        var i = 0
-        while (isActive && i <= steps) {
-            val t = (i.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
-            val (outVol, inVol) = equalPowerCrossfade(t)
+        crossfadeJob = scope.launch {
+            var i = 0
+            while (isActive && i <= steps) {
+                if (crossfadingToIndex != nextIndex) return@launch
 
-            outgoing.volume = startOutgoingVol * outVol
-            incoming.volume = inVol
+                val t = (i.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
+                val (outVol, inVol) = equalPowerCrossfade(t)
 
-            delay(stepDelay)
-            i++
+                outgoing.volume = startOutgoingVol * outVol
+                incoming.volume = inVol
+
+                delay(stepDelay)
+                i++
+            }
+
+            
+            swapToIncomingWhenReady(outgoing, incoming)
         }
-
-        try {
-            outgoing.playWhenReady = false
-            outgoing.stop()
-        } catch (_: Throwable) {}
-        swapToIncomingWhenReady(outgoing, incoming)
     }
-}
 
     private fun equalPowerCrossfade(t: Float): Pair<Float, Float> {
         val tt = t.coerceIn(0f, 1f)

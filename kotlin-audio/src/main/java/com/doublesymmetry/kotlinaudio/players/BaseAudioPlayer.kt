@@ -428,27 +428,26 @@ abstract class BaseAudioPlayer internal constructor(
         exoPlayer.pauseAtEndOfMediaItems = pause
     }
 
-    @CallSuper
+   @CallSuper
     protected fun replacePlayer(newPlayer: ExoPlayer) {
-        // Detach listener from old player
         exoPlayer.removeListener(playerListener)
 
-        // Decide which player MediaSession should see
         val playerToUse =
             if (playerConfig.interceptPlayerActionsTriggeredExternally)
                 createForwardingPlayer(newPlayer)
             else
                 newPlayer
 
-        // Rebind MediaSession + notifications
         mediaSessionConnector.setPlayer(playerToUse)
         notificationManager.setPlayer(playerToUse)
 
-        // Swap reference
         exoPlayer = newPlayer
 
-        // Reattach listener
+        exoPlayer.playWhenReady = true
+
         exoPlayer.addListener(playerListener)
+
+        requestAudioFocus()
     }
 
     /**
